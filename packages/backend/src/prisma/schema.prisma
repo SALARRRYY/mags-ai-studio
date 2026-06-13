@@ -8,14 +8,14 @@ datasource db {
 }
 
 // ============================================================================
-// PHASE 3: Authentication & RBAC System
+// PHASE 3: Authentication & RBAC System (existing)
 // ============================================================================
 
 model User {
   id            String        @id @default(cuid())
   email         String        @unique @db.VarChar(255)
   username      String        @unique @db.VarChar(50)
-  password      String        @db.Text // Hashed with bcrypt
+  password      String        @db.Text
   firstName     String?       @db.VarChar(100)
   lastName      String?       @db.VarChar(100)
   avatar        String?       @db.Text
@@ -27,12 +27,16 @@ model User {
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
-  // Relations
+  // Relations - Phase 3
   userRoles      UserRole[]    @relation("UserRoles")
   sessions       Session[]     @relation("UserSessions")
   refreshTokens  RefreshToken[] @relation("UserRefreshTokens")
   auditLogs      AuditLog[]    @relation("UserAuditLogs")
   passwordResets PasswordReset[] @relation("UserPasswordResets")
+
+  // Relations - Phase 4
+  chats          Chat[]        @relation("UserChats")
+  chatMessages   ChatMessage[] @relation("UserChatMessages")
 
   @@index([email])
   @@index([username])
@@ -47,7 +51,6 @@ model Role {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  // Relations
   userRoles      UserRole[]    @relation("RoleUsers")
   permissions    RolePermission[] @relation("RolePermissions")
 
@@ -63,7 +66,6 @@ model Permission {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  // Relations
   rolePermissions RolePermission[] @relation("PermissionRoles")
 
   @@index([category])
@@ -78,7 +80,6 @@ model UserRole {
   assignedBy String?
   expiresAt DateTime?
 
-  // Relations
   user      User     @relation("UserRoles", fields: [userId], references: [id], onDelete: Cascade)
   role      Role     @relation("RoleUsers", fields: [roleId], references: [id], onDelete: Cascade)
 
@@ -94,7 +95,6 @@ model RolePermission {
   permissionId String
   createdAt    DateTime @default(now())
 
-  // Relations
   role       Role       @relation("RolePermissions", fields: [roleId], references: [id], onDelete: Cascade)
   permission Permission @relation("PermissionRoles", fields: [permissionId], references: [id], onDelete: Cascade)
 
@@ -116,7 +116,6 @@ model Session {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  // Relations
   user          User     @relation("UserSessions", fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
@@ -136,7 +135,6 @@ model RefreshToken {
   isRevoked Boolean  @default(false)
   createdAt DateTime @default(now())
 
-  // Relations
   user      User     @relation("UserRefreshTokens", fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
@@ -154,7 +152,6 @@ model PasswordReset {
   usedAt    DateTime?
   createdAt DateTime @default(now())
 
-  // Relations
   user      User     @relation("UserPasswordResets", fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
@@ -175,7 +172,6 @@ model AuditLog {
   errorMessage String?  @db.Text
   createdAt    DateTime @default(now())
 
-  // Relations
   user         User?    @relation("UserAuditLogs", fields: [userId], references: [id], onDelete: SetNull)
 
   @@index([userId])
@@ -183,4 +179,130 @@ model AuditLog {
   @@index([resourceType])
   @@index([createdAt])
   @@map("audit_logs")
+}
+
+// ============================================================================
+// PHASE 4: AI Chat System (NEW)
+// ============================================================================
+
+model Chat {
+  id          String   @id @default(cuid())
+  userId      String
+  title       String   @db.VarChar(255) @default("New Chat")
+  description String?  @db.Text
+  modelId     String   @default("gpt-4") // Model identifier
+  systemPrompt String? @db.Text // Custom system prompt
+  temperature Float   @default(0.7) // 0.0 - 2.0
+  maxTokens   Int     @default(4000)
+  topP        Float   @default(1.0) // 0.0 - 1.0
+  
+  // Metadata
+  messageCount Int    @default(0)
+  tokenUsage  Int     @default(0)
+  isActive    Boolean @default(true)
+  isPinned    Boolean @default(false)
+  isFavorite  Boolean @default(false)
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  lastMessageAt DateTime?
+  archivedAt  DateTime?
+
+  // Relations
+  user         User          @relation("UserChats", fields: [userId], references: [id], onDelete: Cascade)
+  messages     ChatMessage[] @relation("ChatMessages")
+  sessions     ChatSession[] @relation("ChatSessions")
+
+  @@index([userId])
+  @@index([isActive])
+  @@index([createdAt])
+  @@index([lastMessageAt])
+  @@map("chats")
+}
+
+model ChatMessage {
+  id         String   @id @default(cuid())
+  chatId     String
+  userId     String
+  role       String   @db.VarChar(20) // "user" or "assistant"
+  content    String   @db.Text
+  
+  // Message metadata
+  tokens     Int?     // Token count for this message
+  modelUsed  String?  @db.VarChar(100)
+  
+  // For streaming/editing
+  isStreaming Boolean @default(false)
+  isEdited   Boolean  @default(false)
+  editedAt   DateTime?
+  
+  // Metadata
+  metadata   Json?    // Custom metadata (e.g., citations, tools used)
+  
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  chat       Chat     @relation("ChatMessages", fields: [chatId], references: [id], onDelete: Cascade)
+  user       User     @relation("UserChatMessages", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
+  @@index([userId])
+  @@index([role])
+  @@index([createdAt])
+  @@map("chat_messages")
+}
+
+model ChatSession {
+  id           String   @id @default(cuid())
+  chatId       String
+  sessionToken String   @unique @db.Text // WebSocket session identifier
+  
+  // Connection metadata
+  ipAddress    String?  @db.VarChar(45)
+  userAgent    String?  @db.Text
+  
+  // Session state
+  isActive     Boolean  @default(true)
+  lastActivityAt DateTime @default(now())
+  
+  createdAt    DateTime @default(now())
+  expiresAt    DateTime // When session expires if inactive
+
+  // Relations
+  chat         Chat     @relation("ChatSessions", fields: [chatId], references: [id], onDelete: Cascade)
+
+  @@index([chatId])
+  @@index([sessionToken])
+  @@index([isActive])
+  @@index([expiresAt])
+  @@map("chat_sessions")
+}
+
+model AIModelConfig {
+  id           String   @id @default(cuid())
+  name         String   @unique @db.VarChar(100) // e.g., "gpt-4", "gpt-3.5-turbo"
+  provider     String   @db.VarChar(50) // "openai", "anthropic", etc.
+  apiModel     String   @db.VarChar(100) // Model name for API call
+  
+  // Model capabilities
+  maxTokens    Int      @default(8000)
+  costPerToken Float   @default(0.0)
+  isActive     Boolean  @default(true)
+  
+  // Default settings
+  defaultTemperature Float @default(0.7)
+  defaultTopP Float @default(1.0)
+  
+  // Version management
+  version      String   @db.VarChar(50)
+  releaseDate  DateTime?
+  deprecatedAt DateTime?
+  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([provider])
+  @@index([isActive])
+  @@map("ai_model_configs")
 }
